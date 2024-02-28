@@ -1,0 +1,83 @@
+; 
+; 用于Visual Studio的inf模板
+;
+[Version]
+; 固定写法
+Signature="$WINDOWS NT$"
+; %ClassName% 类似C语言中的宏，值定义在[Strings]节
+Class=%ClassName%
+; GUID可以由Visual Studio集成的“创建GUID”工具生成
+ClassGuid={64607F46-0A0F-4E6A-8A5A-A56EC872E9EE}
+Provider=%ManufacturerName%
+; 驱动版本号由visual studio集成的stampinf工具自动填写
+DriverVer = 
+CatalogFile=DrvLoader.cat
+
+; 用于指定 Copyfiles, Delfiles, Renfiles等指令的目标目录
+; [DefaultDestDir=dirid[,subdir]] 
+[DestinationDirs]
+; dirid列表见：https://docs.microsoft.com/en-us/windows-hardware/drivers/install/using-dirids
+DefaultDestDir = 12
+
+; 用于指定磁盘信息
+; diskid = disk-description[,[tag-or-cab-file][,[unused][,path]]]
+; path: 用于指定相对于根目录的子目录
+[SourceDisksNames]
+1 = %DiskDiscription%,,,""
+
+; 用于指定安装期间涉及的文件，并指定这些文件的磁盘位置
+; filename=diskid[,[ subdir][,size]]
+[SourceDisksFiles]
+; 1对应[SourceDisksNames]节中指定的diskid
+DrvLoader.sys=1
+
+; 安装一个新的驱动安装类
+[ClassInstall32]
+; 使用AddReg指定一个或多个用于添加注册表项的节，也可以使用Copyfiles、Delfiles等命令，
+; 详见：https://docs.microsoft.com/en-us/windows-hardware/drivers/install/inf-classinstall32-section
+; AddReg=add-registry-section[,add-registry-section]...
+AddReg=AddClass
+
+
+[AddClass]
+HKR,,,,%ClassName%
+HKR,,Icon,,"-5"
+
+
+; 制造商
+[Manufacturer]
+; %strkey%=models-section-name [,TargetOSVersion] [,TargetOSVersion] ...
+%ManufacturerName%=Standard,NTamd64
+
+[Standard.NTamd64]
+; device-description=install-section-name[,hw-id][,compatible-id...]
+%DeviceDesc%=Install_Section, PCI\VEN_8888&DEV_8888
+
+; $ARCH$由visual studio集成的stampinf工具进行替换成amd64或x86
+[Install_Section.NTamd64]
+; 拷贝文件到DestinationDirs节指定的目录
+; CopyFiles=@filename | file-list-section[, file-list-section]... 
+CopyFiles=CopyFiles_Section
+
+[Install_Section.NTamd64.Services]
+AddService=%ServicesName%,0x2,InstallServices_Section
+
+
+[CopyFiles_Section]
+DrvLoader.sys
+
+[InstallServices_Section]
+DisplayName=%ServicesDisplayName%
+ErrorControl=1
+ServiceBinary=%12%\DrvLoader.sys
+StartType=3
+ServiceType=1
+
+; 定义字符串常量，类似C语言中的宏
+[Strings]
+ManufacturerName="Nioce"
+ClassName="Red Hat Inc."
+DiskDiscription="Red Hat XXX controller Installation Disk"
+DeviceDesc="Red Hat XXX controller"
+ServicesDisplayName="DrvLoader"
+ServicesName="DrvLoader"

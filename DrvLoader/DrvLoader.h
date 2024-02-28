@@ -1,0 +1,6 @@
+#pragma once
+#include <ntifs.h>
+#include <ntimage.h>
+
+// ¼ÓÔØÇý¶¯
+BOOLEAN LoadDriver(PUCHAR fileBuffer);
