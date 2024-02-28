@@ -10,7 +10,7 @@ BOOLEAN IsPEValid(IN PUCHAR buffer, OUT BOOLEAN* isPE64)
 	if (dosHeader->e_magic == IMAGE_DOS_SIGNATURE)
 	{
 		PIMAGE_NT_HEADERS ntHeaders = (PIMAGE_NT_HEADERS)(buffer + dosHeader->e_lfanew);
-		if (!ntHeaders && ntHeaders->Signature == IMAGE_NT_SIGNATURE)
+		if (ntHeaders && ntHeaders->Signature == IMAGE_NT_SIGNATURE)
 		{
 			// 模数在ntHeaders前部分,前部分ntHeaders64位与32位是一样的
 			if (ntHeaders->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC)
@@ -41,7 +41,7 @@ NTSTATUS FileToImageBuffer(IN PUCHAR fileBuffer, OUT PUCHAR* imageBuffer, OUT PS
 	}
 
 	BOOLEAN isPE64 = FALSE;
-	if (IsPEValid(fileBuffer, &isPE64))
+	if (!IsPEValid(fileBuffer, &isPE64))
 	{
 		status = STATUS_INVALID_PARAMETER_1;
 		goto end;
@@ -57,7 +57,7 @@ NTSTATUS FileToImageBuffer(IN PUCHAR fileBuffer, OUT PUCHAR* imageBuffer, OUT PS
 	{
 		optionHeader64 = &ntHeaders->OptionalHeader;
 		tmpSizeOfImage = optionHeader64->SizeOfImage;
-		 ExAllocatePool(NonPagedPool, tmpSizeOfImage);
+		tmpImageBuffer = ExAllocatePool(NonPagedPool, tmpSizeOfImage);
 		if (tmpImageBuffer)
 		{
 			memset(tmpImageBuffer, 0, tmpSizeOfImage);
@@ -121,19 +121,19 @@ BOOLEAN RepairRelocation(PUCHAR imageBuffer)
 		baseRelocation = (PIMAGE_BASE_RELOCATION)(imageBuffer + dataDirReloc->VirtualAddress);
 		while (baseRelocation->SizeOfBlock && baseRelocation->VirtualAddress)
 		{
-			PULONG64 relocBlock = (PULONG64)((PUCHAR)baseRelocation + sizeof(IMAGE_BASE_RELOCATION));
+			PUSHORT relocBlock = (PUSHORT)((PUCHAR)baseRelocation + sizeof(IMAGE_BASE_RELOCATION));
 			UINT32	numberOfRelocations = (baseRelocation->SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION)) / 2;
 			for (int i = 0; i < numberOfRelocations; i++)
 			{
 				if (relocBlock && ((relocBlock[i] >> 12) == IMAGE_REL_BASED_DIR64))
 				{
-					PUINT64	repairAddress = (PUINT64)((PUINT8)imageBuffer + baseRelocation->VirtualAddress + (relocBlock[i] & 0xFFF));
+					PUINT64	repairAddress = (PUINT64)((PUINT8)imageBuffer + baseRelocation->VirtualAddress + (relocBlock[i] & 0x0FFF));
 					UINT64	delta = *repairAddress - (ULONG64)imageBase + (PUINT8)imageBuffer;
 					*repairAddress = delta;
 				}
 				else if (relocBlock && ((relocBlock[i] >> 12) == IMAGE_REL_BASED_HIGHLOW))
 				{
-					PUINT32	repairAddress = (PUINT32)((PUINT8)imageBuffer + baseRelocation->VirtualAddress + (relocBlock[i] & 0xFFF));
+					PUINT32	repairAddress = (PUINT32)((PUINT8)imageBuffer + baseRelocation->VirtualAddress + (relocBlock[i] & 0x0FFF));
 					UINT32	delta = *repairAddress - (ULONG32)imageBase + (PUINT8)imageBuffer;
 					*repairAddress = delta;
 				}
@@ -149,7 +149,7 @@ BOOLEAN RepairRelocation(PUCHAR imageBuffer)
 // 0环全按名称导入
 BOOLEAN RepairIAT(PUCHAR imageBuffer)
 {
-	BOOLEAN isSuccess = FALSE;
+	BOOLEAN isSuccess = TRUE;
 	BOOLEAN isPE64 = FALSE;
 	if (IsPEValid(imageBuffer, &isPE64))
 	{
@@ -178,9 +178,12 @@ BOOLEAN RepairIAT(PUCHAR imageBuffer)
 						{
 							thunkFunc->u1.Function = (ULONG_PTR)funcAddress;
 						}
-						else break;
+						else
+						{
+							isSuccess = FALSE;
+							continue;;
+						}
 					}
-					isSuccess = TRUE;
 				}
 			}
 		}
@@ -206,9 +209,12 @@ BOOLEAN RepairIAT(PUCHAR imageBuffer)
 						{
 							thunkFunc->u1.Function = (ULONG_PTR)funcAddress;
 						}
-						else break;
+						else
+						{
+							isSuccess = FALSE;
+							break;
+						}
 					}
-					isSuccess = TRUE;
 				}
 			}
 		}
@@ -223,7 +229,7 @@ VOID RepairCookie(char* imageBuffer)
 	PIMAGE_NT_HEADERS pNts = RtlImageNtHeader(imageBuffer);
 	PIMAGE_DATA_DIRECTORY pConfigDir = &pNts->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG];
 	PIMAGE_LOAD_CONFIG_DIRECTORY config = (PIMAGE_LOAD_CONFIG_DIRECTORY)(pConfigDir->VirtualAddress + imageBuffer);
-	*(PULONG_PTR)(config->SecurityCookie) += 1;
+	*(PULONG_PTR)(config->SecurityCookie) += 0x20;
 }
 
 //  -----------  --------------  ----------- 
@@ -233,11 +239,10 @@ typedef NTSTATUS(NTAPI* DriverEntryPfn)(PDRIVER_OBJECT pDriver, PUNICODE_STRING 
 
 BOOLEAN LoadDriver(PUCHAR fileBuffer)
 {
-	DbgBreakPoint();
-	BOOLEAN isSuccess = TRUE;
+	BOOLEAN isSuccess = FALSE;
 	SIZE_T imageSize = 0;
 	PUCHAR imageBase = NULL;
-	if (NT_SUCCESS(FileToImageBuffer(fileBuffer, &imageBase, &imageBase)))
+	if (NT_SUCCESS(FileToImageBuffer(fileBuffer, &imageBase, &imageSize)))
 	{
 		if (RepairRelocation(imageBase))
 		{
@@ -249,7 +254,8 @@ BOOLEAN LoadDriver(PUCHAR fileBuffer)
 				PIMAGE_NT_HEADERS pNts = RtlImageNtHeader(imageBase);
 				ULONG entryPoint = pNts->OptionalHeader.AddressOfEntryPoint;
 				DriverEntryPfn EntryPointFunc = (DriverEntryPfn)(imageBase + entryPoint);
-				if (NT_SUCCESS(EntryPointFunc(NULL, NULL)))
+				NTSTATUS stat = EntryPointFunc(NULL, NULL);
+				if (NT_SUCCESS(stat))
 				{
 					isSuccess = TRUE;
 				}

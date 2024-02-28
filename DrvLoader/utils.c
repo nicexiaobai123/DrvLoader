@@ -5,63 +5,63 @@
 PVOID MmGetSystemRoutineAddressEx(ULONG64 modBase, CHAR* searchFnName)
 {
 	if (modBase == 0 || searchFnName == NULL)  return NULL;
-	SIZE_T funcAddr = 0;
 
+	ULONG64 funcAddr = 0;
 	do
 	{
-		PIMAGE_DOS_HEADER pDosHdr = (PIMAGE_DOS_HEADER)modBase;
-		PIMAGE_NT_HEADERS pNtHdr = (PIMAGE_NT_HEADERS)(modBase + pDosHdr->e_lfanew);
-		PIMAGE_FILE_HEADER pFileHdr = &pNtHdr->FileHeader;
-		PIMAGE_OPTIONAL_HEADER64 pOphtHdr64 = NULL;
-		PIMAGE_OPTIONAL_HEADER32 pOphtHdr32 = NULL;
+		PIMAGE_OPTIONAL_HEADER32 optionHeader32 = NULL;
+		PIMAGE_OPTIONAL_HEADER64 optionHeader64 = NULL;
+		PIMAGE_DOS_HEADER dosHeader = (PIMAGE_DOS_HEADER)modBase;
+		PIMAGE_NT_HEADERS ntHeaders = (PIMAGE_NT_HEADERS)(modBase + dosHeader->e_lfanew);
 
-		if (pFileHdr->Machine == IMAGE_FILE_MACHINE_I386) pOphtHdr32 = (PIMAGE_OPTIONAL_HEADER32)&pNtHdr->OptionalHeader;
-		else pOphtHdr64 = (PIMAGE_OPTIONAL_HEADER64)&pNtHdr->OptionalHeader;
+		if (ntHeaders->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC) optionHeader64 = &ntHeaders->OptionalHeader;
+		else optionHeader32 = &ntHeaders->OptionalHeader;
 
-		ULONG VirtualAddress = 0;
-		if (pOphtHdr64 != NULL) VirtualAddress = pOphtHdr64->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress;
-		else VirtualAddress = pOphtHdr32->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress;
+		ULONG virtualAddress = 0;
+		virtualAddress = (optionHeader64 != NULL ? optionHeader64->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress :
+			optionHeader32->DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress);
+		if (virtualAddress == 0)
+		{
+			break;
+		}
 
-		// 根据 PE 64位/32位 得到导出表
-		PIMAGE_EXPORT_DIRECTORY pExportTable = (IMAGE_EXPORT_DIRECTORY*)(modBase + VirtualAddress);
-		if (NULL == pExportTable) break;
-
-		PULONG pAddrFns = (PULONG)(modBase + pExportTable->AddressOfFunctions);
-		PULONG pAddrNames = (PULONG)(modBase + pExportTable->AddressOfNames);
-		PUSHORT pAddrNameOrdinals = (PUSHORT)(modBase + pExportTable->AddressOfNameOrdinals);
+		PIMAGE_EXPORT_DIRECTORY exportDir = (PIMAGE_EXPORT_DIRECTORY)(modBase + virtualAddress);
+		PULONG fnsAddress = (PULONG)(modBase + exportDir->AddressOfFunctions);
+		PULONG namesAddress = (PULONG)(modBase + exportDir->AddressOfNames);
+		PUSHORT ordinalsAddress = (PUSHORT)(modBase + exportDir->AddressOfNameOrdinals);
 
 		ULONG funcOrdinal, i;
-		char* funcName;
-		for (ULONG i = 0; i < pExportTable->NumberOfNames; ++i)
+		for (ULONG i = 0; i < exportDir->NumberOfNames; i++)
 		{
-			funcName = (char*)(modBase + pAddrNames[i]);
+			char* funcName = (char*)(modBase + namesAddress[i]);
 			if (modBase < MmUserProbeAddress)
 			{
 				__try
 				{
-					if (!_strnicmp(searchFnName, funcName, strlen(searchFnName)))
+					if (_strnicmp(searchFnName, funcName, strlen(searchFnName)) == 0)
 					{
 						if (funcName[strlen(searchFnName)] == 0)
 						{
-							funcAddr = modBase + pAddrFns[pAddrNameOrdinals[i]];
+							funcAddr = modBase + fnsAddress[ordinalsAddress[i]];
 							break;
 						}
 					}
 				}
-				__except (1) { continue; }
+				__except (1) 
+				{ 
+					continue; 
+				}
 			}
 			else
 			{
-				if (MmIsAddressValid(funcName) && MmIsAddressValid(funcName + strlen(searchFnName)))
+				if (MmIsAddressValid(funcName) && _strnicmp(searchFnName, funcName, strlen(searchFnName)) == 0)
 				{
-					if (!_strnicmp(searchFnName, funcName, strlen(searchFnName)))
+					if (funcName[strlen(searchFnName)] == 0)
 					{
-						if (funcName[strlen(searchFnName)] == 0)
-						{
-							funcOrdinal = pExportTable->Base + pAddrNameOrdinals[i] - 1;
-							funcAddr = modBase + pAddrFns[funcOrdinal];
-							break;
-						}
+						// 基序号+ordinals = 真实序号
+						funcOrdinal = exportDir->Base + ordinalsAddress[i] - 1;
+						funcAddr = modBase + fnsAddress[funcOrdinal];
+						break;
 					}
 				}
 			}
