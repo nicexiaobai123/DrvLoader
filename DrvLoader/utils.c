@@ -137,3 +137,91 @@ end:
 	}
 	return moudleBase;
 }
+
+// 删除驱动加载的注册表配置,根据注册表路径
+NTSTATUS RtlDeleteDrvRegPath(PUNICODE_STRING regPath)
+{
+	NTSTATUS status = STATUS_UNSUCCESSFUL;
+	RtlDeleteRegistryValue(RTL_REGISTRY_ABSOLUTE, regPath->Buffer, L"DisplayName");
+	RtlDeleteRegistryValue(RTL_REGISTRY_ABSOLUTE, regPath->Buffer, L"ErrorControl");
+	RtlDeleteRegistryValue(RTL_REGISTRY_ABSOLUTE, regPath->Buffer, L"ImagePath");
+	RtlDeleteRegistryValue(RTL_REGISTRY_ABSOLUTE, regPath->Buffer, L"Start");
+	RtlDeleteRegistryValue(RTL_REGISTRY_ABSOLUTE, regPath->Buffer, L"Type");
+	RtlDeleteRegistryValue(RTL_REGISTRY_ABSOLUTE, regPath->Buffer, L"WOW64");
+
+	//拼装字符串
+	ULONG alloSize = regPath->MaximumLength + 0X100;
+	PWCH enumPath = (PWCH)ExAllocatePool(PagedPool, alloSize);
+	if (enumPath)
+	{
+		memset(enumPath, 0, alloSize);
+		memcpy(enumPath, regPath->Buffer, regPath->Length);
+		wcscat(enumPath, L"\\Enum");
+
+		RtlDeleteRegistryValue(RTL_REGISTRY_ABSOLUTE, enumPath, L"enumPath");
+		RtlDeleteRegistryValue(RTL_REGISTRY_ABSOLUTE, enumPath, L"INITSTARTFAILED");
+		RtlDeleteRegistryValue(RTL_REGISTRY_ABSOLUTE, enumPath, L"NextInstance");
+
+		HANDLE hKeyEnum = NULL;
+		OBJECT_ATTRIBUTES enumObj = { 0 };
+		UNICODE_STRING unEnumName;
+		RtlInitUnicodeString(&unEnumName, enumPath);
+		InitializeObjectAttributes(&enumObj, &unEnumName, OBJ_CASE_INSENSITIVE, NULL, NULL);
+		status = ZwOpenKey(&hKeyEnum, KEY_ALL_ACCESS, &enumObj);
+		if (NT_SUCCESS(status))
+		{
+			ZwDeleteKey(hKeyEnum);
+			ZwClose(hKeyEnum);
+		}
+		ExFreePool(enumPath);
+	}
+
+	//删除根部
+	if (NT_SUCCESS(status))
+	{
+		HANDLE hKeyRoot = NULL;
+		OBJECT_ATTRIBUTES rootObj = { 0 };
+		InitializeObjectAttributes(&rootObj, regPath, OBJ_CASE_INSENSITIVE, NULL, NULL);
+		status = ZwOpenKey(&hKeyRoot, KEY_ALL_ACCESS, &rootObj);
+		if (NT_SUCCESS(status))
+		{
+			ZwDeleteKey(hKeyRoot);
+			ZwClose(hKeyRoot);
+			return STATUS_SUCCESS;
+		}
+	}
+
+	return STATUS_UNSUCCESSFUL;
+}
+
+// 根据文件路径强制删除文件
+NTSTATUS RtlForceDeleteFile(PWCH filePath)
+{
+	HANDLE hFile = NULL;
+	OBJECT_ATTRIBUTES objFile = { 0 };
+	IO_STATUS_BLOCK ioBlock = { 0 };
+	UNICODE_STRING unFileName = { 0 };
+	NTSTATUS status = STATUS_UNSUCCESSFUL;
+
+	RtlInitUnicodeString(&unFileName, filePath);
+	InitializeObjectAttributes(&objFile, &unFileName, OBJ_CASE_INSENSITIVE, NULL, NULL);
+	status = ZwCreateFile(&hFile, GENERIC_READ, &objFile, &ioBlock, NULL, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_OPEN_IF, FILE_NON_DIRECTORY_FILE, NULL, NULL);
+	if (NT_SUCCESS(status))
+	{
+		PFILE_OBJECT fileObj = NULL;
+		status = ObReferenceObjectByHandle(hFile, FILE_ALL_ACCESS, *IoFileObjectType, KernelMode, &fileObj, NULL);
+		if (NT_SUCCESS(status))
+		{
+			// 内核直接改文件对象属性,然后删除
+			fileObj->DeleteAccess = TRUE;
+			fileObj->DeletePending = FALSE;
+			fileObj->SectionObjectPointer->DataSectionObject = NULL;
+			fileObj->SectionObjectPointer->ImageSectionObject = NULL;
+			//pFile->SectionObjectPointer->SharedCacheMap = NULL;
+			ObDereferenceObject(fileObj);
+		}
+		ZwClose(hFile);
+		status = ZwDeleteFile(&objFile);
+	}
+	return status;
+}
